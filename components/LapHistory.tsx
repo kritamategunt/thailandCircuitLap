@@ -91,7 +91,7 @@ export function LapHistory({ sessionId }: { sessionId: string | null }) {
           </Link>
         </div>
       </div>
-      {data && !data.track.verified && <UncalibratedBanner />}
+      {data && !data.track.verified && <UncalibratedBanner trackId={data.track.id} />}
       {err && <p className="text-sm text-red">{err}</p>}
 
       {data?.summary && (

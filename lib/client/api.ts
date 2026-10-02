@@ -1,5 +1,5 @@
 "use client";
-import type { GPSPoint, LapRecord, TrackDefinition, TrackSession } from "@/lib/types";
+import type { GeoLine, GPSPoint, LapRecord, TrackDefinition, TrackSession } from "@/lib/types";
 import type { LapComparison, LapAnalysis, SessionSummary } from "@/lib/telemetry";
 
 class ApiError extends Error {
@@ -21,7 +21,16 @@ export type SessionDetail = {
   lapsComputedAt: string | null;
   laps: LapRecord[];
   track: { id: string; verified: boolean };
+  startFinish: GeoLine | null;
 };
+
+export type SessionLive = {
+  session: TrackSession & { startFinish: GeoLine | null };
+  points: GPSPoint[];
+  serverTime: number;
+};
+
+export type LiveRider = { id: string; name: string | null; startedAt: string; lastFixAt: number; lat: number; lng: number; speed: number | null };
 
 export type LapDetail = {
   lap: LapRecord;
@@ -40,6 +49,10 @@ export const api = {
     call<{ accepted: number }>(`/api/sessions/${id}/gps`, { method: "POST", body: JSON.stringify({ points }), headers: { "x-session-token": token } }),
   finish: (id: string, token: string) => call(`/api/sessions/${id}/finish`, { method: "POST", headers: { "x-session-token": token } }),
   recompute: (id: string, token: string) => call(`/api/sessions/${id}/recompute`, { method: "POST", headers: { "x-session-token": token } }),
+  setStartFinish: (id: string, token: string, line: GeoLine) =>
+    call(`/api/sessions/${id}/start-finish`, { method: "POST", body: JSON.stringify({ line }), headers: { "x-session-token": token } }),
+  live: (id: string, since = 0) => call<SessionLive>(`/api/sessions/${id}/live?since=${since}`),
+  liveRiders: (trackId: string) => call<{ riders: LiveRider[] }>(`/api/tracks/${trackId}/live`),
   session: (id: string) => call<SessionDetail>(`/api/sessions/${id}`),
   trajectory: (id: string) => call<{ points: TrajectoryPoint[] }>(`/api/sessions/${id}/trajectory`),
   lap: (id: string, points = false) => call<LapDetail>(`/api/laps/${id}${points ? "?points=1" : ""}`),

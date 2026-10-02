@@ -43,11 +43,11 @@ export function QualityBadge({ rating }: { rating: "good" | "medium" | "poor" | 
   return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${cls}`}>{rating}</span>;
 }
 
-export function UncalibratedBanner() {
+export function UncalibratedBanner({ trackId }: { trackId: string }) {
   return (
     <div className="rounded-md border border-flag/40 bg-flag/10 px-3 py-2 text-xs text-flag">
       Track geometry is a <b>placeholder</b> — laps won&apos;t be detected until start/finish is calibrated.{" "}
-      <a href="/track?calibrate=1" className="font-bold underline">
+      <a href={`/track?calibrate=1&track=${trackId}`} className="font-bold underline">
         Calibrate
       </a>
     </div>

@@ -15,6 +15,9 @@ export type MapLine = {
 
 export type DraftMarker = { lng: number; lat: number; label: string; color?: string };
 
+/** Live position dot (rider phone). */
+export type MapRider = { id: string; lng: number; lat: number; label?: string; color?: string };
+
 type Props = {
   track: TrackDefinition;
   lines?: MapLine[];
@@ -22,6 +25,9 @@ type Props = {
   draftLines?: GeoLine[];
   onMapClick?: (c: Coordinate) => void;
   height?: string;
+  riders?: MapRider[];
+  /** Keep the first rider centred until the user pans (a button re-enables it). */
+  follow?: boolean;
 };
 
 type Style = NonNullable<ConstructorParameters<typeof MLMap>[0]["style"]>;
@@ -102,7 +108,7 @@ function linesGeoJSON(lines: MapLine[]) {
   return fc(f);
 }
 
-export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = [], onMapClick, height = "60vh" }: Props) {
+export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = [], onMapClick, height = "60vh", riders = [], follow = false }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const markersRef = useRef<MLMarker[]>([]);
@@ -113,6 +119,8 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
   const [base, setBase] = useState<"sat" | "osm">("sat");
   const [error, setError] = useState<string | null>(null);
   clickRef.current = onMapClick;
+  const riderMarkers = useRef(new Map<string, MLMarker>());
+  const [following, setFollowing] = useState(follow);
 
   // Init once.
   useEffect(() => {
@@ -134,6 +142,7 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
         });
         map.addControl(new ml.NavigationControl({ visualizePitch: true }), "top-right");
         map.addControl(new ml.ScaleControl({ unit: "metric" }), "bottom-left");
+        map.on("dragstart", () => setFollowing(false));
         map.on("click", (e: MapMouseEvent) => clickRef.current?.({ latitude: e.lngLat.lat, longitude: e.lngLat.lng }));
         map.on("load", () => {
           map.addSource("track", { type: "geojson", data: trackGeoJSON(track) });
@@ -215,6 +224,16 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
     (map.getSource("track") as unknown as { setData: (d: FeatureCollection) => void }).setData(trackGeoJSON(track));
   }, [ready, track]);
 
+  // Recenter when switching to a different track (init effect only runs once).
+  const shownTrackId = useRef(track.id);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || shownTrackId.current === track.id) return;
+    shownTrackId.current = track.id;
+    fitted.current = false;
+    map.jumpTo({ center: [track.center.longitude, track.center.latitude], zoom: track.defaultZoom });
+  }, [ready, track]);
+
   // Corner + draft markers (HTML markers: no glyph server needed).
   useEffect(() => {
     const map = mapRef.current;
@@ -233,6 +252,33 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
     ];
     (map.getSource("draft") as unknown as { setData: (d: FeatureCollection) => void }).setData(fc(draftLines.map((l) => lineFeature(l))));
   }, [ready, track, draftMarkers, draftLines]);
+
+  // Live rider dots: move existing markers instead of recreating them every poll.
+  useEffect(() => {
+    const map = mapRef.current;
+    const Marker = markerCtor.current;
+    if (!ready || !map || !Marker) return;
+    const seen = new Set<string>();
+    for (const r of riders) {
+      seen.add(r.id);
+      let m = riderMarkers.current.get(r.id);
+      if (!m) {
+        const div = document.createElement("div");
+        div.className = "rider-dot";
+        div.style.setProperty("--rider", r.color ?? "#3ad7ff");
+        div.innerHTML = `<span></span>${r.label ? `<b>${r.label.replace(/[<>&]/g, "")}</b>` : ""}`;
+        m = new Marker({ element: div }).setLngLat([r.lng, r.lat]).addTo(map);
+        riderMarkers.current.set(r.id, m);
+      } else m.setLngLat([r.lng, r.lat]);
+    }
+    for (const [id, m] of riderMarkers.current)
+      if (!seen.has(id)) {
+        m.remove();
+        riderMarkers.current.delete(id);
+      }
+    const lead = riders[0];
+    if (follow && following && lead) map.easeTo({ center: [lead.lng, lead.lat], zoom: Math.max(map.getZoom(), 17), duration: 600 });
+  }, [ready, riders, follow, following]);
 
   // 2D / 3D camera (+ terrain when configured; graceful fallback otherwise).
   useEffect(() => {
@@ -262,7 +308,8 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
 
   return (
     <div className="relative overflow-hidden rounded-lg border border-line" style={{ height }}>
-      <div ref={el} className="absolute inset-0" />
+      {/* Size via h-full/w-full: maplibre-gl.css forces .maplibregl-map to position:relative, which beats Tailwind's `absolute inset-0` and collapses the map to 0px. */}
+      <div ref={el} className="h-full w-full" />
       <div className="absolute top-2 left-2 z-10 flex gap-1">
         {(["2D", "3D"] as const).map((m) => (
           <button key={m} onClick={() => setMode(m)} className={`rounded px-3 py-1.5 text-xs font-black ${mode === m ? "bg-flag text-black" : "bg-black/70 text-ink"}`}>
@@ -273,6 +320,11 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
           {base === "sat" ? "Map" : "Satellite"}
         </button>
       </div>
+      {follow && !following && (
+        <button onClick={() => setFollowing(true)} className="absolute right-2 bottom-8 z-10 rounded bg-flag px-3 py-2 text-xs font-black text-black uppercase">
+          ◎ Follow
+        </button>
+      )}
       {error && <div className="absolute bottom-8 left-2 z-10 rounded bg-black/80 px-2 py-1 text-xs text-flag">{error}</div>}
     </div>
   );

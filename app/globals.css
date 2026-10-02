@@ -39,3 +39,39 @@ body {
 .maplibregl-ctrl-attrib {
   font-size: 10px;
 }
+
+/* Live rider marker (TrackMap riders): pulsing dot + optional label. */
+.rider-dot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.rider-dot span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--rider);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 0 var(--rider);
+  animation: rider-pulse 1.6s ease-out infinite;
+}
+.rider-dot b {
+  margin-top: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #000c;
+  color: #fff;
+  font: 700 10px ui-monospace, monospace;
+  white-space: nowrap;
+}
+@keyframes rider-pulse {
+  to {
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rider-dot span {
+    animation: none;
+  }
+}

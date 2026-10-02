@@ -1,9 +1,13 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import type { Coordinate, GeoLine } from "@/lib/types";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
-import { api, type TrajectoryPoint } from "@/lib/client/api";
-import { TrackMap, type DraftMarker, type MapLine } from "@/components/TrackMap";
+import { useSelectedTrack, useSessionTrack } from "@/lib/client/selectedTrack";
+import { TrackPicker } from "@/components/TrackPicker";
+import { api, type LiveRider, type TrajectoryPoint } from "@/lib/client/api";
+import { TrackMap, type DraftMarker, type MapLine, type MapRider } from "@/components/TrackMap";
+import Link from "next/link";
 import { Panel, UncalibratedBanner } from "@/components/ui";
 
 type Step = "sfA" | "sfB" | "s1A" | "s1B" | "s2A" | "s2B" | "corner";
@@ -20,8 +24,26 @@ const ORDER: Step[] = ["sfA", "sfB", "s1A", "s1B", "s2A", "s2B", "corner"];
 const r7 = (n: number) => Math.round(n * 1e7) / 1e7;
 const coordTs = (c: Coordinate) => `{ latitude: ${r7(c.latitude)}, longitude: ${r7(c.longitude)} }`;
 
-export function TrackView({ sessionId, calibrate }: { sessionId: string | null; calibrate: boolean }) {
-  const track = getTrack(DEFAULT_TRACK_ID)!;
+export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string | null; trackId: string | null; calibrate: boolean }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [selected, selectTrack] = useSelectedTrack();
+  const sessionTrack = useSessionTrack(sessionId);
+  // A session pins its own track; otherwise ?track= wins over the device's remembered pick.
+  // Free Road has no layout to show here; fall back to the default circuit.
+  const fallback = sessionId || selected.free ? getTrack(DEFAULT_TRACK_ID)! : selected;
+  const track = (sessionId ? sessionTrack : getTrack(trackId ?? "")) ?? fallback;
+
+  function pickTrack(id: string) {
+    selectTrack(id);
+    const q = new URLSearchParams(searchParams.toString());
+    q.set("track", id);
+    router.replace(`${pathname}?${q}`);
+    setPts({});
+    setCorners([]);
+    setStepIdx(0);
+  }
   const [traj, setTraj] = useState<TrajectoryPoint[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [pts, setPts] = useState<Partial<Record<Step, Coordinate>>>({});
@@ -33,6 +55,30 @@ export function TrackView({ sessionId, calibrate }: { sessionId: string | null; 
     if (!sessionId) return;
     api.trajectory(sessionId).then((r) => setTraj(r.points)).catch((e: Error) => setErr(e.message));
   }, [sessionId]);
+
+  // Riders on this circuit right now (skipped while viewing one session or calibrating).
+  const [liveRiders, setLiveRiders] = useState<LiveRider[]>([]);
+  const watchLive = !sessionId && !calibrate && !track.free;
+  useEffect(() => {
+    setLiveRiders([]);
+    if (!watchLive) return;
+    let stop = false;
+    const tick = () =>
+      api
+        .liveRiders(track.id)
+        .then((r) => !stop && setLiveRiders(r.riders))
+        .catch(() => {});
+    void tick();
+    const id = setInterval(() => document.visibilityState === "visible" && void tick(), 5_000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [track.id, watchLive]);
+  const riderDots: MapRider[] = useMemo(
+    () => liveRiders.map((r, i) => ({ id: r.id, lng: r.lng, lat: r.lat, label: r.name ?? `Rider ${i + 1}`, color: "#19e27a" })),
+    [liveRiders],
+  );
 
   const lines: MapLine[] = useMemo(
     () => (traj.length > 1 ? [{ id: "traj", coords: traj.map((p) => [p.lng, p.lat] as [number, number]), color: "#3ad7ff", speeds: traj.map((p) => (p.v == null ? null : p.v * 3.6)), width: 3 }] : []),
@@ -77,12 +123,13 @@ export function TrackView({ sessionId, calibrate }: { sessionId: string | null; 
           </p>
         </div>
         {!calibrate && (
-          <a href={`/track?calibrate=1${sessionId ? `&session=${sessionId}` : ""}`} className="rounded bg-line px-3 py-2 text-xs font-bold uppercase">
+          <a href={`/track?calibrate=1&track=${track.id}${sessionId ? `&session=${sessionId}` : ""}`} className="rounded bg-line px-3 py-2 text-xs font-bold uppercase">
             Calibrate
           </a>
         )}
       </div>
-      {!track.verified && !calibrate && <UncalibratedBanner />}
+      {!sessionId && <TrackPicker value={track.id} onChange={pickTrack} />}
+      {!track.verified && !calibrate && <UncalibratedBanner trackId={track.id} />}
       {err && <p className="text-sm text-red">{err}</p>}
 
       {calibrate && (
@@ -117,11 +164,32 @@ export function TrackView({ sessionId, calibrate }: { sessionId: string | null; 
         </Panel>
       )}
 
-      <TrackMap track={track} lines={lines} draftLines={draftLines} draftMarkers={draftMarkers} onMapClick={onClick} height={calibrate ? "55vh" : "70vh"} />
+      <TrackMap track={track} lines={lines} riders={riderDots} draftLines={draftLines} draftMarkers={draftMarkers} onMapClick={onClick} height={calibrate ? "55vh" : "70vh"} />
+
+      {watchLive && (
+        <Panel title={`Live on track (${liveRiders.length})`}>
+          {liveRiders.length === 0 ? (
+            <p className="text-sm text-dim">Nobody is sending GPS here right now. Riders appear when a session is recording on this circuit.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {liveRiders.map((r, i) => (
+                <li key={r.id} className="flex items-center gap-3 py-2">
+                  <span className="h-2.5 w-2.5 rounded-full bg-go" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold">{r.name ?? `Rider ${i + 1}`}</span>
+                  <span className="timing text-sm text-dim">{r.speed == null ? "--" : Math.round(r.speed * 3.6)} km/h</span>
+                  <Link href={`/live/${r.id}`} className="rounded bg-go/15 px-3 py-1.5 text-xs font-bold text-go uppercase">
+                    Watch
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
 
       {calibrate && (
         <Panel
-          title="Paste into tracks/thailand-circuit.ts"
+          title={`Paste into tracks/${track.id}.ts`}
           right={
             <button onClick={() => navigator.clipboard?.writeText(snippet)} className="rounded bg-flag px-3 py-1 text-xs font-bold text-black">
               Copy

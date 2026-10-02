@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type LapDetail } from "@/lib/client/api";
 import type { LapComparison } from "@/lib/telemetry/compare";
 import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
+import { useSessionTrack } from "@/lib/client/selectedTrack";
 import { TrackMap, type MapLine } from "@/components/TrackMap";
 import { SpeedTrace } from "@/components/SpeedTrace";
 import { Delta, Empty, LapTime, Panel } from "@/components/ui";
@@ -28,7 +29,7 @@ export function CompareView({ a, b }: { a: string | null; b: string | null }) {
       .catch((e: Error) => setErr(e.message));
   }, [a, b]);
 
-  const track = getTrack(DEFAULT_TRACK_ID)!;
+  const track = useSessionTrack(la?.lap.sessionId) ?? getTrack(DEFAULT_TRACK_ID)!;
   const lines: MapLine[] = useMemo(() => {
     const mk = (d: LapDetail | null, id: string, color: string): MapLine[] =>
       d?.points?.length ? [{ id, color, width: 4, coords: d.points.map((p) => [p.lng, p.lat] as [number, number]) }] : [];

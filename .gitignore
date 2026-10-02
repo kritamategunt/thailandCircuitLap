@@ -11,3 +11,5 @@ coverage
 
 # copied from node_modules by scripts/copy-maplibre-worker.mjs
 /public/maplibre/
+.env*
+!.env.example

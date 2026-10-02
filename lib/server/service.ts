@@ -1,4 +1,4 @@
-import type { GPSPoint, LapRecord, TrackDefinition } from "@/lib/types";
+import type { GeoLine, GPSPoint, LapRecord, TrackDefinition } from "@/lib/types";
 import { getTrack } from "@/tracks";
 import {
   analyzeCorner,
@@ -8,6 +8,7 @@ import {
   processSession,
   sanitizePoints,
   sliceTrajectory,
+  withStartFinish,
   type LapForCompare,
 } from "@/lib/telemetry";
 import * as repo from "./repo";
@@ -30,6 +31,11 @@ function requireTrack(trackId: string): TrackDefinition {
   const t = getTrack(trackId);
   if (!t) throw new ServiceError(404, `Unknown track: ${trackId}`);
   return t;
+}
+
+/** Track as timed for this session (Free Road sessions apply their own start/finish). */
+function sessionTrack(s: repo.SessionRow): TrackDefinition {
+  return withStartFinish(requireTrack(s.track_id), s.start_finish);
 }
 
 async function requireSession(id: string): Promise<repo.SessionRow> {
@@ -85,10 +91,19 @@ export async function finishSession(sessionId: string, token: string | null) {
   return recomputeSession(sessionId);
 }
 
+/** Free Road: store the rider's start/finish line and re-time everything recorded so far. */
+export async function setStartFinish(sessionId: string, token: string | null, line: GeoLine) {
+  const s = await requireSession(sessionId);
+  if (!tokenMatches(token, s.write_token_hash)) throw new ServiceError(401, "Invalid session token");
+  if (!getTrack(s.track_id)?.free) throw new ServiceError(400, "Start/finish is fixed on circuits (calibrate tracks/*.ts instead)");
+  await repo.updateSession(sessionId, { start_finish: line });
+  return recomputeSession(sessionId);
+}
+
 /** Server is the source of truth for laps: deterministic recompute from all stored points. */
 export async function recomputeSession(sessionId: string) {
   const s = await requireSession(sessionId);
-  const track = requireTrack(s.track_id);
+  const track = sessionTrack(s);
   const raw = await repo.getPoints(sessionId);
   const processed = processSession(raw, track);
   await repo.replaceLaps(
@@ -152,8 +167,36 @@ export async function getSessionDetail(sessionId: string) {
     summary: s.summary,
     lapsComputedAt: s.laps_computed_at,
     laps,
-    track: { id: s.track_id, verified: getTrack(s.track_id)?.verified ?? false },
+    track: { id: s.track_id, verified: getTrack(s.track_id) ? sessionTrack(s).verified : false },
+    startFinish: s.start_finish ?? null,
   };
+}
+
+/** A fix older than this means the rider's phone is not sending (offline, paused, screen locked). */
+const LIVE_STALE_MS = 120_000;
+/** Max points per live poll; the first poll of a long session returns only the latest ones. */
+const LIVE_MAX_POINTS = 3000;
+
+/** Live view poll: session header + raw points newer than `sinceTs`. */
+export async function getSessionLive(sessionId: string, sinceTs: number) {
+  const s = await requireSession(sessionId);
+  const raw = await repo.getPoints(sessionId, sinceTs + 1);
+  return {
+    session: { ...repo.toTrackSession(s), startFinish: s.start_finish ?? null },
+    points: raw.slice(-LIVE_MAX_POINTS),
+    serverTime: Date.now(),
+  };
+}
+
+/** Riders currently sending GPS on a circuit (Free Road is never listed: those are public roads). */
+export async function listLiveRiders(trackId: string) {
+  const t = requireTrack(trackId);
+  if (t.free) return [];
+  const rows = await repo.listActiveSessionRows(trackId, new Date(Date.now() - 12 * 3600_000).toISOString());
+  const withLast = await Promise.all(rows.map(async (r) => ({ r, last: await repo.getLatestPoint(r.id) })));
+  return withLast
+    .filter(({ last }) => last != null && Date.now() - last.ts < LIVE_STALE_MS)
+    .map(({ r, last }) => ({ id: r.id, name: r.name, startedAt: r.started_at, lastFixAt: last!.ts, lat: last!.lat, lng: last!.lng, speed: last!.speed }));
 }
 
 export async function getSessionLaps(sessionId: string) {
@@ -206,7 +249,7 @@ export async function getLapDetail(lapId: string, opts: { includePoints?: boolea
 export async function compareLapsById(lapAId: string, lapBId: string) {
   const [a, b] = await Promise.all([requireLap(lapAId), requireLap(lapBId)]);
   const s = await requireSession(a.session_id);
-  const track = requireTrack(s.track_id);
+  const track = sessionTrack(s);
   const [la, lb] = await Promise.all([loadForCompare(a), loadForCompare(b)]);
   return compareLaps(la, lb, track.corners);
 }
@@ -222,7 +265,7 @@ export async function getCornerData(lapId: string, cornerId: string) {
 export async function analyzeLapById(lapId: string) {
   const lap = await requireLap(lapId);
   const s = await requireSession(lap.session_id);
-  const track = requireTrack(s.track_id);
+  const track = sessionTrack(s);
   if (!s.summary) await recomputeSession(s.id);
   const summary = (await requireSession(s.id)).summary!;
   const bestRow = await repo.getBestLapRow(s.id);

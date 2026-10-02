@@ -1,4 +1,4 @@
-import type { GPSPoint, LapKind, LapMetrics, TrackSession } from "@/lib/types";
+import type { GeoLine, GPSPoint, LapKind, LapMetrics, TrackSession } from "@/lib/types";
 import type { SessionSummary } from "@/lib/telemetry";
 import { db } from "./supabase";
 
@@ -14,6 +14,8 @@ export type SessionRow = {
   write_token_hash: string;
   summary: SessionSummary | null;
   laps_computed_at: string | null;
+  /** Free Road only: start/finish dropped by the rider. Null on circuits. */
+  start_finish: GeoLine | null;
 };
 
 export type LapRow = {
@@ -110,6 +112,21 @@ export async function getPoints(sessionId: string, fromTs?: number, toTs?: numbe
     if (rows.length < PAGE) break;
   }
   return out;
+}
+
+/** Newest stored fix, or null when the session has none. */
+export async function getLatestPoint(sessionId: string): Promise<{ ts: number; lat: number; lng: number; speed: number | null } | null> {
+  const rows = check(
+    await db().from("gps_points").select("ts,lat,lng,speed").eq("session_id", sessionId).order("ts", { ascending: false }).limit(1),
+  ) as Array<{ ts: number; lat: number; lng: number; speed: number | null }>;
+  return rows[0] ? { ...rows[0], ts: Number(rows[0].ts) } : null;
+}
+
+/** Active sessions on a track started within `sinceIso` (newest first). */
+export async function listActiveSessionRows(trackId: string, sinceIso: string, limit = 20): Promise<SessionRow[]> {
+  return check(
+    await db().from("sessions").select("*").eq("track_id", trackId).eq("status", "active").gte("started_at", sinceIso).order("started_at", { ascending: false }).limit(limit),
+  ) as SessionRow[];
 }
 
 export async function countPoints(sessionId: string): Promise<number> {

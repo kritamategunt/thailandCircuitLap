@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type LapDetail } from "@/lib/client/api";
 import type { LapAnalysis } from "@/lib/telemetry/analysis";
 import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
+import { useSessionTrack } from "@/lib/client/selectedTrack";
 import { TrackMap, type MapLine } from "@/components/TrackMap";
 import { SpeedTrace } from "@/components/SpeedTrace";
 import { Delta, Empty, LapTime, Panel, QualityBadge, Stat } from "@/components/ui";
@@ -18,7 +19,7 @@ export function LapAnalysisView({ lapId }: { lapId: string }) {
     api.analysis(lapId).then(setAnalysis).catch(() => {});
   }, [lapId]);
 
-  const track = getTrack(DEFAULT_TRACK_ID)!;
+  const track = useSessionTrack(lap?.lap.sessionId) ?? getTrack(DEFAULT_TRACK_ID)!;
   const lines: MapLine[] = useMemo(
     () =>
       lap?.points?.length

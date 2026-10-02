@@ -2,14 +2,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
 import { api } from "@/lib/client/api";
 import { listSessionMetas, saveSessionMeta, type LocalSessionMeta } from "@/lib/client/localStore";
 import { Empty, Panel, UncalibratedBanner } from "@/components/ui";
+import { TrackPicker } from "@/components/TrackPicker";
+import { TRACK_LIST, freeRoad } from "@/tracks";
+import { useSelectedTrack } from "@/lib/client/selectedTrack";
 
 export default function Dashboard() {
   const router = useRouter();
-  const track = getTrack(DEFAULT_TRACK_ID)!;
+  const [track, selectTrack] = useSelectedTrack();
   const [sessions, setSessions] = useState<LocalSessionMeta[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,10 +40,22 @@ export default function Dashboard() {
       <header className="pt-2">
         <p className="text-xs font-bold tracking-[0.3em] text-flag uppercase">AI Track Engineer</p>
         <h1 className="text-3xl font-black tracking-tight">{track.name}</h1>
-        <p className="text-sm text-dim">Nakhon Chai Si · {(track.lengthMeters ?? 0) / 1000} km · phone GPS lap timing</p>
+        <p className="text-sm text-dim">
+          {track.location ? `${track.location} · ` : ""}
+          {track.free ? "test GPS anywhere, set your own start/finish" : `${(track.lengthMeters ?? 0) / 1000} km · phone GPS lap timing`}
+        </p>
       </header>
 
-      {!track.verified && <UncalibratedBanner />}
+      <TrackPicker value={track.id} onChange={selectTrack} tracks={[...TRACK_LIST, freeRoad]} />
+
+      {track.free ? (
+        <div className="rounded-md border border-line bg-panel px-3 py-2 text-xs text-dim">
+          Free road: GPS check + lap timing on any loop. Start the session, ride to your start point, tap <b className="text-ink">Set start/finish here</b>.
+          Obey traffic law — this is for testing, not racing on public roads.
+        </div>
+      ) : (
+        !track.verified && <UncalibratedBanner trackId={track.id} />
+      )}
 
       <button
         onClick={startSession}

@@ -65,6 +65,8 @@ export type TrackDefinition = {
   id: string;
   name: string;
   country: string;
+  /** Town/district shown under the track name. */
+  location?: string;
   /** Map centre + zoom for visualization. */
   center: Coordinate;
   defaultZoom: number;
@@ -84,6 +86,8 @@ export type TrackDefinition = {
   boundary?: { left: Coordinate[]; right: Coordinate[] };
   /** False until coordinates have been surveyed/verified on-site. UI warns while false. */
   verified: boolean;
+  /** No fixed geometry: the rider drops the start/finish line per session (normal roads). */
+  free?: boolean;
   notes?: string;
 };
 

@@ -1,5 +1,5 @@
 "use client";
-import type { GPSPoint } from "@/lib/types";
+import type { GeoLine, GPSPoint } from "@/lib/types";
 
 /**
  * Local buffer (IndexedDB). Every GPS fix is written here FIRST; the upload queue drains it.
@@ -22,6 +22,10 @@ export type LocalSessionMeta = {
   status: "active" | "completed";
   /** FINISH pressed while offline — the queue sends it once all points are uploaded. */
   finishPending?: boolean;
+  /** Free Road: line dropped on this phone. */
+  startFinish?: GeoLine;
+  /** startFinish not yet confirmed by the server — the queue sends it before points. */
+  startFinishPending?: boolean;
 };
 
 let dbPromise: Promise<IDBDatabase> | null = null;

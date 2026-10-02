@@ -11,3 +11,4 @@ export * from "./corners";
 export * from "./compare";
 export * from "./analysis";
 export * from "./liveTimer";
+export * from "./freeRoad";

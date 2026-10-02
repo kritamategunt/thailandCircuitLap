@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLiveSession } from "@/hooks/useLiveSession";
 import { formatLapTime } from "@/lib/telemetry/analysis";
 import { classifyAccuracy } from "@/lib/telemetry/quality";
-import { getTrack } from "@/tracks";
+import { TrackMap, type MapLine, type MapRider } from "@/components/TrackMap";
+import { ShareLiveButton } from "@/components/ShareLiveButton";
 
 const GPS_LABEL: Record<string, string> = {
   idle: "OFF",
@@ -24,6 +25,18 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [flash, setFlash] = useState(false);
   const [finishNote, setFinishNote] = useState<string | null>(null);
+  const [view, setView] = useState<"timer" | "map">("timer");
+  const [lineNote, setLineNote] = useState<string | null>(null);
+
+  const trailLines: MapLine[] = useMemo(
+    () =>
+      s.trail.length > 1
+        ? [{ id: "trail", coords: s.trail.map((p) => [p.longitude, p.latitude] as [number, number]), speeds: s.trail.map((p) => (p.speed == null ? null : p.speed * 3.6)), width: 4, color: "#fff" }]
+        : [],
+    [s.trail],
+  );
+  const lastFix = s.trail[s.trail.length - 1];
+  const riders: MapRider[] = useMemo(() => (lastFix ? [{ id: "me", lng: lastFix.longitude, lat: lastFix.latitude, color: "#19e27a" }] : []), [lastFix]);
 
   // Flash the screen on a start/finish crossing — readable at a glance.
   useEffect(() => {
@@ -45,7 +58,9 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
     );
   }
 
-  const track = getTrack(s.meta.trackId);
+  const track = s.track;
+  const isFree = !!track?.free;
+  const hasLine = !!s.meta.startFinish;
   const acc = classifyAccuracy(s.gps.status === "active" ? s.live.accuracy : null);
   const gpsOk = s.gps.status === "active";
   const gpsTone = !gpsOk ? "text-red" : acc === "good" ? "text-go" : acc === "fair" ? "text-flag" : "text-red";
@@ -74,7 +89,10 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
         </span>
       </div>
 
-      {track && !track.verified && (
+      {isFree && !hasLine && (
+        <div className="bg-flag/15 px-4 py-1 text-center text-[11px] font-semibold text-flag">Free road — ride to your start point, then tap SET START/FINISH</div>
+      )}
+      {track && !isFree && !track.verified && (
         <div className="bg-flag/15 px-4 py-1 text-center text-[11px] font-semibold text-flag">Track not calibrated — recording only, no lap detection</div>
       )}
       {s.gps.status === "denied" && <div className="bg-red/20 px-4 py-2 text-center text-sm text-red">{s.gps.message}</div>}
@@ -82,8 +100,51 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
         <div className="bg-red/20 px-4 py-1 text-center text-xs text-red">Keep this screen open — GPS may pause in background</div>
       )}
 
+      <div className="flex items-center gap-2 px-4 pt-2">
+        {(["timer", "map"] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`rounded px-3 py-1.5 text-xs font-black tracking-widest uppercase ${view === v ? "bg-flag text-black" : "bg-line"}`}
+          >
+            {v}
+          </button>
+        ))}
+        <span className="ml-auto" />
+        <ShareLiveButton sessionId={sessionId} />
+      </div>
+
+      {view === "map" && track && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 py-2">
+          <div className="min-h-0 flex-1">
+            <TrackMap
+              track={track}
+              lines={trailLines}
+              riders={riders}
+              follow
+              draftLines={s.meta.startFinish ? [s.meta.startFinish] : []}
+              height="100%"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded bg-panel p-2">
+              <div className="text-[10px] font-bold tracking-widest text-dim">SPEED</div>
+              <div className="timing text-2xl font-black">{s.live.speedKmh == null || !gpsOk ? "--" : Math.round(s.live.speedKmh)}</div>
+            </div>
+            <div className="rounded bg-panel p-2">
+              <div className="text-[10px] font-bold tracking-widest text-dim">LAP {s.live.lapNumber}</div>
+              <div className="timing text-2xl font-black">{formatLapTime(s.currentLapMs)}</div>
+            </div>
+            <div className="rounded bg-panel p-2">
+              <div className="text-[10px] font-bold tracking-widest text-dim">FIXES</div>
+              <div className="timing text-2xl font-black">{s.live.pointCount}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* timing */}
-      <div className="grid flex-1 grid-rows-[auto_1fr_auto] gap-2 px-4 py-3">
+      <div className={`grid flex-1 grid-rows-[auto_1fr_auto] gap-2 px-4 py-3 ${view === "map" ? "hidden" : ""}`}>
         <div className="flex items-end justify-between">
           <div>
             <div className="text-[11px] font-bold tracking-widest text-dim">LAP</div>
@@ -117,6 +178,20 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
         </div>
       </div>
 
+      {lineNote && <div className="px-4 pb-2 text-center text-sm text-flag">{lineNote}</div>}
+      {isFree && (s.recording === "recording" || s.recording === "paused") && (
+        <div className="px-4 pb-2">
+          <button
+            onClick={async () => {
+              const err = await s.setStartFinishHere();
+              setLineNote(err ?? "Start/finish set here. Laps count each time you pass this point.");
+            }}
+            className="w-full rounded-xl border-2 border-flag py-3 text-sm font-black tracking-widest text-flag uppercase"
+          >
+            {hasLine ? "Move start/finish here" : "Set start/finish here"}
+          </button>
+        </div>
+      )}
       {finishNote && <div className="px-4 pb-2 text-center text-sm text-flag">{finishNote}</div>}
 
       {/* controls — big, thumb-sized */}

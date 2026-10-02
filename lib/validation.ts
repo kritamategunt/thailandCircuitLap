@@ -26,6 +26,12 @@ export const gpsBatchSchema = z.object({
   points: z.array(gpsPointSchema).min(1).max(MAX_POINTS_PER_BATCH),
 });
 
+const coordinateSchema = z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) });
+
+export const startFinishSchema = z.object({
+  line: z.object({ pointA: coordinateSchema, pointB: coordinateSchema }),
+});
+
 export const createSessionSchema = z.object({
   trackId: z.string().regex(/^[a-z0-9-]{1,64}$/),
   name: z.string().trim().max(80).optional(),

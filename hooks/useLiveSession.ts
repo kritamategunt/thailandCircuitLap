@@ -1,11 +1,15 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GPSPoint } from "@/lib/types";
+import type { GPSPoint, TrackDefinition } from "@/lib/types";
 import { getTrack } from "@/tracks";
 import { LiveLapTimer, initialLiveState, type LiveState } from "@/lib/telemetry/liveTimer";
+import { startLineAt, travelHeading, withStartFinish } from "@/lib/telemetry/freeRoad";
 import { GpsTracker, requestWakeLock, type GpsStatus } from "@/lib/client/gpsTracker";
 import { UploadQueue, type QueueStatus } from "@/lib/client/uploadQueue";
 import { getSessionMeta, getSessionPoints, saveSessionMeta, savePoint, type LocalSessionMeta } from "@/lib/client/localStore";
+
+/** Points kept in memory for the live map trail (~10 min at 1 Hz). */
+const TRAIL_POINTS = 600;
 
 export type RecordingState = "idle" | "recording" | "paused" | "finishing" | "finished";
 
@@ -22,6 +26,7 @@ export function useLiveSession(sessionId: string) {
   const [queue, setQueue] = useState<QueueStatus>({ pending: 0, online: true, lastError: null, lastUploadAt: null });
   const [hidden, setHidden] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [trail, setTrail] = useState<GPSPoint[]>([]);
 
   const trackerRef = useRef<GpsTracker | null>(null);
   const timerRef = useRef<LiveLapTimer | null>(null);
@@ -37,12 +42,14 @@ export function useLiveSession(sessionId: string) {
       if (cancelled) return;
       setMeta(m ?? null);
       if (!m) return;
-      const track = getTrack(m.trackId);
+      const track = sessionTrack(m);
       if (!track) return;
+      const stored = await getSessionPoints(sessionId);
       const timer = new LiveLapTimer(track);
-      for (const p of await getSessionPoints(sessionId)) timer.feed(p);
+      for (const p of stored) timer.feed(p);
       timerRef.current = timer;
       setLive(timer.getState());
+      setTrail(stored.slice(-TRAIL_POINTS));
       if (m.status === "completed") setRecording("finished");
       else if (timer.getState().pointCount > 0) setRecording("paused");
       const q = new UploadQueue(sessionId, setQueue);
@@ -82,9 +89,10 @@ export function useLiveSession(sessionId: string) {
         lastStored.current = p.timestamp;
         void savePoint(sessionId, p);
       }
-      // 2) live timing
+      // 2) live timing + map trail
       const t = timerRef.current;
       if (t) setLive(t.feed(p));
+      setTrail((tr) => (tr.length >= TRAIL_POINTS ? [...tr.slice(1 - TRAIL_POINTS), p] : [...tr, p]));
     },
     [sessionId],
   );
@@ -119,8 +127,36 @@ export function useLiveSession(sessionId: string) {
     return done && !after?.finishPending;
   }, [meta, sessionId]);
 
+  /**
+   * Free Road: drop the start/finish line at the current position, across the travel direction.
+   * Re-times everything recorded so far. Returns an error message when it can't be placed yet.
+   */
+  const setStartFinishHere = useCallback(async (): Promise<string | null> => {
+    if (!meta) return "Session not loaded";
+    const last = trail[trail.length - 1];
+    if (!last || Date.now() - last.timestamp > 10_000) return "No recent GPS fix — wait for GPS ON";
+    const heading = travelHeading(last, trail.slice(-30, -1));
+    if (heading == null) return "Ride a few meters first so the direction is known";
+    const updated: LocalSessionMeta = { ...meta, startFinish: startLineAt(last, heading), startFinishPending: true };
+    await saveSessionMeta(updated);
+    setMeta(updated);
+    const timer = new LiveLapTimer(sessionTrack(updated)!);
+    for (const p of await getSessionPoints(sessionId)) timer.feed(p);
+    timerRef.current = timer;
+    setLive(timer.getState());
+    void queueRef.current?.flush();
+    return null;
+  }, [meta, trail, sessionId]);
+
+  const track = meta ? sessionTrack(meta) : undefined;
+
   const currentLapMs =
     live.currentLapStart == null ? null : Math.max(0, (recording === "recording" ? now : live.lastFixTime ?? now) - live.currentLapStart);
 
-  return { meta, recording, gps, live, queue, hidden, currentLapMs, start, pause, finish };
+  return { meta, track, recording, gps, live, queue, hidden, currentLapMs, trail, start, pause, finish, setStartFinishHere };
+}
+
+function sessionTrack(m: LocalSessionMeta): TrackDefinition | undefined {
+  const t = getTrack(m.trackId);
+  return t && withStartFinish(t, m.startFinish);
 }

@@ -5,7 +5,8 @@ import { api } from "./api";
 
 export type QueueStatus = { pending: number; online: boolean; lastError: string | null; lastUploadAt: number | null };
 
-const FLUSH_INTERVAL_MS = 5_000;
+/** Short so live viewers see the rider move with only a few seconds of delay. */
+const FLUSH_INTERVAL_MS = 2_000;
 const MAX_BACKOFF_MS = 60_000;
 
 /**
@@ -50,8 +51,13 @@ export class UploadQueue {
     this.busy = true;
     let empty = false;
     try {
-      const meta = await getSessionMeta(this.sessionId);
+      let meta = await getSessionMeta(this.sessionId);
       if (!meta) return true;
+      if (meta.startFinishPending && meta.startFinish) {
+        await api.setStartFinish(this.sessionId, meta.writeToken, meta.startFinish);
+        meta = { ...meta, startFinishPending: false };
+        await saveSessionMeta(meta);
+      }
       for (;;) {
         const batch = await getPending(this.sessionId, MAX_POINTS_PER_BATCH);
         if (batch.length === 0) break;
