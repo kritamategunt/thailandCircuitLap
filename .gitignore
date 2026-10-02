@@ -8,3 +8,6 @@ out
 next-env.d.ts
 .vercel
 coverage
+
+# copied from node_modules by scripts/copy-maplibre-worker.mjs
+/public/maplibre/

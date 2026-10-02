@@ -121,6 +121,8 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
       try {
         const ml = await import("maplibre-gl");
         if (disposed || !el.current) return;
+        // Served from public/ (see scripts/copy-maplibre-worker.mjs); bundling breaks the default lookup.
+        ml.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
         markerCtor.current = ml.Marker;
         const map = new ml.Map({
           container: el.current,
