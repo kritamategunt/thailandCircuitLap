@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #f4f4f5;
+  --color-dim: #8b8b94;
+  --color-bg: #09090b;
+  --color-panel: #131316;
+  --color-line: #26262b;
+  --color-flag: #ffd500;   /* racing yellow — primary action */
+  --color-red: #ff2d2d;
+  --color-go: #19e27a;
+  --color-best: #b76bff;   /* timing-screen purple = personal best */
+  --font-timing: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.timing {
+  font-family: var(--font-timing);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* subtle chequered strip used as a brand accent */
+.chequer {
+  background-image: conic-gradient(#fff 25%, #000 0 50%, #fff 0 75%, #000 0);
+  background-size: 8px 8px;
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
