@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bearingDeg, calculateDistance, detectLaps, offset, startLineAt, travelHeading, withStartFinish } from "@/lib/telemetry";
+import { START_LINE_FORWARD, bearingDeg, calculateDistance, detectLaps, hasCrossedLine, headingAlong, offset, startLineAt, travelHeading, withStartFinish } from "@/lib/telemetry";
 import { freeRoad } from "@/tracks";
 import type { CleanPoint } from "@/lib/types";
 
@@ -16,6 +16,19 @@ describe("free road start line", () => {
     const l = startLineAt(origin, 0);
     expect(calculateDistance(l.pointA, l.pointB)).toBeCloseTo(30, 0);
     expect(bearingDeg(l.pointA, l.pointB)).toBeCloseTo(90, 0);
+  });
+
+  it("riding forward through the line crosses in START_LINE_FORWARD direction", () => {
+    const l = startLineAt(origin, 0); // heading north
+    expect(hasCrossedLine(offset(origin, 180, 5), offset(origin, 0, 5), l)?.direction).toBe(START_LINE_FORWARD);
+    expect(hasCrossedLine(offset(origin, 0, 5), offset(origin, 180, 5), l)?.direction).not.toBe(START_LINE_FORWARD);
+  });
+
+  it("headingAlong follows the polyline direction near a point, null when far away", () => {
+    const trail = [0, 10, 20, 30, 40].map((m) => offset(origin, 90, m)); // riding east
+    expect(headingAlong(trail, offset(trail[2]!, 0, 5))).toBeCloseTo(90, 0);
+    expect(headingAlong([...trail].reverse(), trail[2]!)).toBeCloseTo(270, 0);
+    expect(headingAlong(trail, offset(origin, 0, 100))).toBeNull();
   });
 
   it("heading falls back to bearing from history when device heading is missing", () => {

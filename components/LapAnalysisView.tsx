@@ -62,7 +62,7 @@ export function LapAnalysisView({ lapId }: { lapId: string }) {
       <TrackMap track={track} lines={lines} height="50vh" />
 
       <Panel title="Speed trace">
-        <SpeedTrace series={[{ label: `Lap ${lap.lap.lapNumber}`, color: "#ffd500", points: lap.points ?? [] }]} />
+        <SpeedTrace series={[{ label: `Lap ${lap.lap.lapNumber}`, color: "#ffd500", points: lap.points ?? [] }]} bySpeed />
       </Panel>
 
       <Panel title="Sectors">

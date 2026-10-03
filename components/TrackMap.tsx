@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MLMap, Marker as MLMarker, MapMouseEvent } from "maplibre-gl";
 import type { FeatureCollection } from "geojson";
 import type { Coordinate, GeoLine, TrackDefinition } from "@/lib/types";
+import { SPEED_COLORS, speedRange, speedStops, type SpeedRange } from "@/components/speedColors";
 
 export type MapLine = {
   id: string;
@@ -170,7 +171,7 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
                 "case",
                 ["<", ["get", "speed"], 0],
                 "#555",
-                ["interpolate", ["linear"], ["get", "speed"], 40, "#ff2d2d", 90, "#ffd500", 140, "#19e27a", 200, "#3ad7ff"],
+                ["interpolate", ["linear"], ["get", "speed"], ...speedStops(DEFAULT_SPEED_RANGE)],
               ],
             },
           });
@@ -195,6 +196,14 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Speed colours span the speeds actually shown (a 60 km/h kart track and a 250 km/h superbike lap both use the full scale).
+  const speeds = useMemo(() => speedRange(lines.flatMap((l) => l.speeds ?? [])), [lines]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !speeds) return;
+    map.setPaintProperty("laps-speed", "line-color", ["case", ["<", ["get", "speed"], 0], "#555", ["interpolate", ["linear"], ["get", "speed"], ...speedStops(speeds)]]);
+  }, [ready, speeds]);
 
   // Lap lines -> fit bounds on first data.
   const fitted = useRef(false);
@@ -326,12 +335,29 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
           {base === "sat" ? "Map" : "Satellite"}
         </button>
       </div>
+      {speeds && <SpeedLegend range={speeds} />}
       {follow && !following && (
         <button onClick={() => setFollowing(true)} className="absolute right-2 bottom-8 z-10 rounded bg-flag px-3 py-2 text-xs font-black text-black uppercase">
           ◎ Follow
         </button>
       )}
       {error && <div className="absolute bottom-8 left-2 z-10 rounded bg-black/80 px-2 py-1 text-xs text-flag">{error}</div>}
+    </div>
+  );
+}
+
+/** Used until there is speed data to scale from. */
+const DEFAULT_SPEED_RANGE: SpeedRange = { lo: 40, hi: 140 };
+
+function SpeedLegend({ range }: { range: SpeedRange }) {
+  return (
+    <div className="pointer-events-none absolute top-11 left-2 z-10 rounded bg-black/70 px-2 py-1 text-[10px] font-bold">
+      <div className="mb-0.5 tracking-widest text-dim uppercase">Speed km/h</div>
+      <div className="h-1.5 w-32 rounded" style={{ background: `linear-gradient(to right, ${SPEED_COLORS.join(", ")})` }} />
+      <div className="timing mt-0.5 flex justify-between">
+        <span>{range.lo} slow</span>
+        <span>fast {range.hi}</span>
+      </div>
     </div>
   );
 }

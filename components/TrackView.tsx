@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import type { Coordinate, GeoLine } from "@/lib/types";
+import type { Coordinate } from "@/lib/types";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
 import { useSelectedTrack, useSessionTrack } from "@/lib/client/selectedTrack";
@@ -9,18 +9,11 @@ import { api, type LiveRider, type TrackGroup, type TrajectoryPoint } from "@/li
 import { TrackMap, type DraftMarker, type MapLine, type MapRider } from "@/components/TrackMap";
 import Link from "next/link";
 import { Panel, UncalibratedBanner } from "@/components/ui";
+import { SpeedTrace } from "@/components/SpeedTrace";
+import { START_LINE_FORWARD, bearingDeg, headingAlong, startLineAt } from "@/lib/telemetry/freeRoad";
 
-type Step = "sfA" | "sfB" | "s1A" | "s1B" | "s2A" | "s2B" | "corner";
-const STEP_LABEL: Record<Step, string> = {
-  sfA: "Start/Finish — point A (one track edge)",
-  sfB: "Start/Finish — point B (other edge)",
-  s1A: "End of Sector 1 — point A",
-  s1B: "End of Sector 1 — point B",
-  s2A: "End of Sector 2 — point A",
-  s2B: "End of Sector 2 — point B",
-  corner: "Corner apexes (tap each, in order T1, T2, …)",
-};
-const ORDER: Step[] = ["sfA", "sfB", "s1A", "s1B", "s2A", "s2B", "corner"];
+/** Half-width of a calibrated circuit start/finish (track is ~12–15 m wide; lineToleranceMeters extends it further). */
+const SF_HALF_WIDTH_M = 10;
 const r7 = (n: number) => Math.round(n * 1e7) / 1e7;
 const coordTs = (c: Coordinate) => `{ latitude: ${r7(c.latitude)}, longitude: ${r7(c.longitude)} }`;
 
@@ -40,16 +33,18 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
     const q = new URLSearchParams(searchParams.toString());
     q.set("track", id);
     router.replace(`${pathname}?${q}`);
-    setPts({});
-    setCorners([]);
-    setStepIdx(0);
+    resetCalibration();
   }
   const [traj, setTraj] = useState<TrajectoryPoint[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const [pts, setPts] = useState<Partial<Record<Step, Coordinate>>>({});
-  const [corners, setCorners] = useState<Coordinate[]>([]);
-  const [stepIdx, setStepIdx] = useState(0);
-  const step = ORDER[stepIdx]!;
+  // Calibration: one tap on the start/finish; the line is drawn across the track automatically.
+  const [sfPoint, setSfPoint] = useState<Coordinate | null>(null);
+  /** Second tap, only when the riding direction can't be read from a recorded trail or the track layout. */
+  const [dirPoint, setDirPoint] = useState<Coordinate | null>(null);
+  function resetCalibration() {
+    setSfPoint(null);
+    setDirPoint(null);
+  }
 
   useEffect(() => {
     if (!sessionId) return;
@@ -105,33 +100,49 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
     [traj],
   );
 
+  // Riding direction at the tapped point: recorded trail (ordered by time) > track layout > second tap.
+  const trailCoords = useMemo(() => traj.filter((p) => p.q === 1).map((p) => ({ latitude: p.lat, longitude: p.lng })), [traj]);
+  const fromTrail = sfPoint ? headingAlong(trailCoords, sfPoint) : null;
+  const fromLayout =
+    sfPoint && fromTrail == null
+      ? ((track.racingLine && headingAlong(track.racingLine, sfPoint)) ?? (track.boundary && headingAlong(track.boundary.left, sfPoint)) ?? null)
+      : null;
+  const needDirTap = sfPoint != null && fromTrail == null && fromLayout == null;
+  const fromTaps = needDirTap && dirPoint ? bearingDeg(sfPoint, dirPoint) : null;
+  const heading = fromTrail ?? fromLayout ?? fromTaps;
+  const sf = sfPoint && heading != null ? startLineAt(sfPoint, heading, SF_HALF_WIDTH_M) : null;
+  // Layout polylines aren't guaranteed to be stored in riding order, so only a trail or the user's tap fixes the direction.
+  const direction = fromTrail != null || fromTaps != null ? START_LINE_FORWARD : "any";
+
   function onClick(c: Coordinate) {
     if (!calibrate) return;
-    if (step === "corner") setCorners((cs) => [...cs, c]);
+    if (needDirTap && !dirPoint) setDirPoint(c);
     else {
-      setPts((p) => ({ ...p, [step]: c }));
-      setStepIdx((i) => Math.min(i + 1, ORDER.length - 1));
+      setSfPoint(c);
+      setDirPoint(null);
     }
   }
 
-  const line = (a?: Coordinate, b?: Coordinate): GeoLine | null => (a && b ? { pointA: a, pointB: b } : null);
-  const sf = line(pts.sfA, pts.sfB);
-  const s1 = line(pts.s1A, pts.s1B);
-  const s2 = line(pts.s2A, pts.s2B);
-  const draftLines = [sf, s1, s2].filter((l): l is GeoLine => !!l);
+  const draftLines = sf ? [sf] : [];
   const draftMarkers: DraftMarker[] = [
-    ...ORDER.filter((k) => k !== "corner" && pts[k]).map((k) => ({ lng: pts[k]!.longitude, lat: pts[k]!.latitude, label: k.toUpperCase(), color: "#ff2d2d" })),
-    ...corners.map((c, i) => ({ lng: c.longitude, lat: c.latitude, label: `T${i + 1}`, color: "#ffd500" })),
+    ...(sfPoint ? [{ lng: sfPoint.longitude, lat: sfPoint.latitude, label: "S/F", color: "#ff2d2d" }] : []),
+    ...(dirPoint && needDirTap ? [{ lng: dirPoint.longitude, lat: dirPoint.latitude, label: "→", color: "#ffd500" }] : []),
   ];
 
-  const snippet = [
-    sf && `  startFinishLine: {\n    pointA: ${coordTs(sf.pointA)},\n    pointB: ${coordTs(sf.pointB)},\n  },`,
-    `  sectors: [\n    { id: "S1", name: "Sector 1"${s1 ? `, endLine: { pointA: ${coordTs(s1.pointA)}, pointB: ${coordTs(s1.pointB)} }` : ""} },\n    { id: "S2", name: "Sector 2"${s2 ? `, endLine: { pointA: ${coordTs(s2.pointA)}, pointB: ${coordTs(s2.pointB)} }` : ""} },\n    { id: "S3", name: "Sector 3" },\n  ],`,
-    `  corners: [\n${corners.map((c, i) => `    { id: "T${i + 1}", name: "Turn ${i + 1}", apex: ${coordTs(c)} },`).join("\n")}\n  ],`,
-    sf && "  verified: true,",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const snippet = sf
+    ? `  startFinishLine: {\n    pointA: ${coordTs(sf.pointA)},\n    pointB: ${coordTs(sf.pointB)},\n  },\n  direction: "${direction}",\n  verified: true,`
+    : "";
+  const calibrationHint = !sfPoint
+    ? "Tap the start/finish line on the map (zoom in on satellite view)."
+    : needDirTap && !dirPoint
+      ? "Now tap a spot a little further along the track, in the direction you ride."
+      : "Start/finish set. Tap the map again to move it.";
+
+  // Speed over time for the overlaid session (same colours as the map).
+  const speedSeries = useMemo(() => {
+    const t0 = traj[0]?.t ?? 0;
+    return traj.map((p) => ({ d: (p.t - t0) / 60_000, v: p.v == null ? null : p.v * 3.6 }));
+  }, [traj]);
 
   return (
     <div className="space-y-4">
@@ -153,38 +164,39 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
       {err && <p className="text-sm text-red">{err}</p>}
 
       {calibrate && (
-        <Panel title="Calibration">
-          <p className="mb-2 text-sm">
-            Tap: <b className="text-flag">{STEP_LABEL[step]}</b>
-          </p>
-          <p className="mb-3 text-xs text-dim">
-            Draw each line across the full track width (it is extended by {track.lineToleranceMeters} m each side). Use satellite view, ideally with a
-            recorded session overlaid (&session=…).
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {ORDER.map((k, i) => (
-              <button key={k} onClick={() => setStepIdx(i)} className={`rounded px-2 py-1 text-[11px] font-bold ${i === stepIdx ? "bg-flag text-black" : pts[k] ? "bg-go/20 text-go" : "bg-line"}`}>
-                {k}
+        <Panel
+          title="Calibrate start/finish"
+          right={
+            sfPoint && (
+              <button onClick={resetCalibration} className="rounded bg-red/30 px-2 py-1 text-[11px] font-bold">
+                Reset
               </button>
-            ))}
-            <button onClick={() => setCorners((c) => c.slice(0, -1))} className="rounded bg-line px-2 py-1 text-[11px] font-bold">
-              Undo corner
-            </button>
-            <button
-              onClick={() => {
-                setPts({});
-                setCorners([]);
-                setStepIdx(0);
-              }}
-              className="rounded bg-red/30 px-2 py-1 text-[11px] font-bold"
-            >
-              Reset
-            </button>
-          </div>
+            )
+          }
+        >
+          <p className={`text-sm font-semibold ${sf ? "text-go" : "text-flag"}`}>
+            {sf ? "✓ " : ""}
+            {calibrationHint}
+          </p>
+          {sf && direction === "any" && (
+            <p className="mt-1 text-xs text-dim">Riding direction unknown, so laps count in both directions — fine for most tracks.</p>
+          )}
+          {!sessionId && (
+            <p className="mt-2 text-xs text-dim">
+              Tip: open a recorded session (Home → Map) and press Calibrate. Your trail shows exactly where the track is and sets the riding direction, so one tap
+              is enough.
+            </p>
+          )}
         </Panel>
       )}
 
       <TrackMap track={track} lines={lines} riders={riderDots} draftLines={draftLines} draftMarkers={draftMarkers} onMapClick={onClick} height={calibrate ? "55vh" : "70vh"} />
+
+      {sessionId && !calibrate && traj.length > 1 && (
+        <Panel title="Speed">
+          <SpeedTrace series={[{ label: "Session", color: "#fff", points: speedSeries }]} bySpeed xLabel="km/h vs time (min)" xUnit="min" />
+        </Panel>
+      )}
 
       {watchLive && (
         <Panel title={`Live on track (${liveRiders.length})`}>
@@ -247,9 +259,9 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
         </Panel>
       )}
 
-      {calibrate && (
+      {calibrate && sf && (
         <Panel
-          title={`Paste into tracks/${track.id}.ts`}
+          title={`Replace these fields in tracks/${track.id}.ts`}
           right={
             <button onClick={() => navigator.clipboard?.writeText(snippet)} className="rounded bg-flag px-3 py-1 text-xs font-bold text-black">
               Copy
@@ -259,7 +271,7 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
           <pre className="overflow-x-auto text-[11px] leading-relaxed text-go">{snippet}</pre>
           <p className="mt-2 text-xs text-dim">
             Then redeploy and re-time old sessions with <code>POST /api/sessions/&lt;id&gt;/recompute</code> (or the “Re-time” button on the Laps page). If
-            laps count in the wrong direction, set <code>direction</code> to &quot;left-to-right&quot; or &quot;right-to-left&quot;.
+            laps count in the wrong direction, set <code>direction</code> to &quot;any&quot;.
           </p>
         </Panel>
       )}
