@@ -16,7 +16,10 @@ export type SessionRow = {
   laps_computed_at: string | null;
   /** Free Road only: start/finish dropped by the rider. Null on circuits. */
   start_finish: GeoLine | null;
+  group_id: string | null;
 };
+
+export type GroupRow = { id: string; track_id: string; name: string | null; created_at: string };
 
 export type LapRow = {
   id: string;
@@ -55,9 +58,13 @@ function check<T>(res: { data: T; error: { message: string } | null }): T {
   return res.data;
 }
 
-export async function insertSession(trackId: string, name: string | undefined, tokenHash: string): Promise<SessionRow> {
+export async function insertSession(trackId: string, name: string | undefined, tokenHash: string, groupId?: string): Promise<SessionRow> {
   const row = check(
-    await db().from("sessions").insert({ track_id: trackId, name: name ?? null, write_token_hash: tokenHash }).select("*").single<SessionRow>(),
+    await db()
+      .from("sessions")
+      .insert({ track_id: trackId, name: name ?? null, write_token_hash: tokenHash, group_id: groupId ?? null })
+      .select("*")
+      .single<SessionRow>(),
   );
   if (!row) throw new Error("Session insert returned no row");
   return row;
@@ -127,6 +134,64 @@ export async function listActiveSessionRows(trackId: string, sinceIso: string, l
   return check(
     await db().from("sessions").select("*").eq("track_id", trackId).eq("status", "active").gte("started_at", sinceIso).order("started_at", { ascending: false }).limit(limit),
   ) as SessionRow[];
+}
+
+export async function insertGroup(trackId: string, name: string | undefined): Promise<GroupRow> {
+  const row = check(await db().from("groups").insert({ track_id: trackId, name: name ?? null }).select("*").single<GroupRow>());
+  if (!row) throw new Error("Group insert returned no row");
+  return row;
+}
+
+export async function getGroupRow(id: string): Promise<GroupRow | null> {
+  return check(await db().from("groups").select("*").eq("id", id).maybeSingle<GroupRow>());
+}
+
+export async function listGroupSessionRows(groupId: string, limit = 30): Promise<SessionRow[]> {
+  return check(await db().from("sessions").select("*").eq("group_id", groupId).order("started_at").limit(limit)) as SessionRow[];
+}
+
+/** Groups on a track created after `sinceIso` (newest first). */
+export async function listRecentGroupRows(trackId: string, sinceIso: string, limit = 10): Promise<GroupRow[]> {
+  return check(
+    await db().from("groups").select("*").eq("track_id", trackId).gte("created_at", sinceIso).order("created_at", { ascending: false }).limit(limit),
+  ) as GroupRow[];
+}
+
+export async function listSessionRowsByGroups(groupIds: string[]): Promise<SessionRow[]> {
+  if (groupIds.length === 0) return [];
+  return check(await db().from("sessions").select("*").in("group_id", groupIds)) as SessionRow[];
+}
+
+/** Points of several sessions that reached the server after `sinceIso` (server clock), oldest first. */
+export async function getPointsReceivedSince(sessionIds: string[], sinceIso: string, limit: number): Promise<Array<GPSPoint & { sessionId: string }>> {
+  if (sessionIds.length === 0) return [];
+  const rows = check(
+    await db()
+      .from("gps_points")
+      .select("session_id,ts,lat,lng,speed,accuracy,altitude,heading")
+      .in("session_id", sessionIds)
+      .gt("received_at", sinceIso)
+      .order("received_at", { ascending: false })
+      .limit(limit),
+  ) as Array<PointRow & { session_id: string }>;
+  return rows.reverse().map((r) => ({
+    sessionId: r.session_id,
+    timestamp: Number(r.ts),
+    latitude: r.lat,
+    longitude: r.lng,
+    speed: r.speed,
+    accuracy: r.accuracy,
+    altitude: r.altitude,
+    heading: r.heading,
+  }));
+}
+
+/** Lap times of several sessions (no metrics payload) — enough for a leaderboard. */
+export async function getLapTimes(sessionIds: string[]): Promise<Array<{ session_id: string; lap_number: number; is_timed: boolean; lap_time_ms: number }>> {
+  if (sessionIds.length === 0) return [];
+  return check(
+    await db().from("laps").select("session_id,lap_number,is_timed,lap_time_ms").in("session_id", sessionIds).order("lap_number"),
+  ) as Array<{ session_id: string; lap_number: number; is_timed: boolean; lap_time_ms: number }>;
 }
 
 export async function countPoints(sessionId: string): Promise<number> {

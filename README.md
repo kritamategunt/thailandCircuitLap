@@ -21,7 +21,7 @@ Geolocation needs HTTPS on phones. For on-phone testing of a local build use a t
 
 ### 1. Supabase
 1. Create a project at supabase.com.
-2. **SQL Editor → New query** → paste `supabase/migrations/0001_init.sql` → Run.
+2. **SQL Editor → New query** → paste each file in `supabase/migrations/` in order (`0001` … `0004`) → Run.
 3. **Project Settings → API**: copy `Project URL`, `anon` key, `service_role` key.
 
 ### 2. Vercel

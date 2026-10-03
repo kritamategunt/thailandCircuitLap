@@ -35,6 +35,12 @@ export const startFinishSchema = z.object({
 export const createSessionSchema = z.object({
   trackId: z.string().regex(/^[a-z0-9-]{1,64}$/),
   name: z.string().trim().max(80).optional(),
+  groupId: uuidSchema.optional(),
+});
+
+export const createGroupSchema = z.object({
+  trackId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  name: z.string().trim().max(80).optional(),
 });
 
 /** Read + size-limit + parse JSON body. Returns null on failure (caller answers 4xx). */

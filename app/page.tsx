@@ -16,10 +16,23 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState("");
+  const [groupName, setGroupName] = useState("");
 
   useEffect(() => {
     listSessionMetas().then(setSessions).catch(() => setSessions([]));
   }, []);
+
+  async function createGroup() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { group } = await api.createGroup(track.id, groupName.trim() || undefined);
+      router.push(`/group/${group.id}?join=1`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create group (are you online?)");
+      setBusy(false);
+    }
+  }
 
   async function startSession() {
     setBusy(true);
@@ -65,6 +78,30 @@ export default function Dashboard() {
         {busy ? "Creating…" : "Start session"}
       </button>
       {error && <p className="text-sm text-red">{error}</p>}
+
+      <Panel title="Ride with friends">
+        <p className="mb-3 text-xs text-dim">
+          Create a group, share the link, and everyone who joins shows up live on one map with a leaderboard. Anyone with the link can watch.
+        </p>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void createGroup();
+          }}
+        >
+          <input
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            placeholder="Group name (optional)"
+            maxLength={80}
+            className="min-w-0 flex-1 rounded border border-line bg-bg px-3 py-2 text-sm"
+          />
+          <button disabled={busy} className="shrink-0 rounded bg-line px-4 text-xs font-bold uppercase disabled:opacity-50">
+            Create group
+          </button>
+        </form>
+      </Panel>
 
       <Panel title="My sessions (this device)">
         {sessions.length === 0 ? (

@@ -26,6 +26,8 @@ export type LocalSessionMeta = {
   startFinish?: GeoLine;
   /** startFinish not yet confirmed by the server — the queue sends it before points. */
   startFinishPending?: boolean;
+  /** Joined from /group/<id> — the live screen links back to the group view. */
+  groupId?: string;
 };
 
 let dbPromise: Promise<IDBDatabase> | null = null;

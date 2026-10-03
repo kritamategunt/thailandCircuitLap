@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DEFAULT_TRACK_ID, getTrack } from "@/tracks";
 import { useSelectedTrack, useSessionTrack } from "@/lib/client/selectedTrack";
 import { TrackPicker } from "@/components/TrackPicker";
-import { api, type LiveRider, type TrajectoryPoint } from "@/lib/client/api";
+import { api, type LiveRider, type TrackGroup, type TrajectoryPoint } from "@/lib/client/api";
 import { TrackMap, type DraftMarker, type MapLine, type MapRider } from "@/components/TrackMap";
 import Link from "next/link";
 import { Panel, UncalibratedBanner } from "@/components/ui";
@@ -58,16 +58,24 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
 
   // Riders on this circuit right now (skipped while viewing one session or calibrating).
   const [liveRiders, setLiveRiders] = useState<LiveRider[]>([]);
+  const [groups, setGroups] = useState<TrackGroup[]>([]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const watchLive = !sessionId && !calibrate && !track.free;
   useEffect(() => {
     setLiveRiders([]);
+    setGroups([]);
     if (!watchLive) return;
     let stop = false;
-    const tick = () =>
+    const tick = () => {
       api
         .liveRiders(track.id)
         .then((r) => !stop && setLiveRiders(r.riders))
         .catch(() => {});
+      api
+        .trackGroups(track.id)
+        .then((r) => !stop && setGroups(r.groups))
+        .catch(() => {});
+    };
     void tick();
     const id = setInterval(() => document.visibilityState === "visible" && void tick(), 5_000);
     return () => {
@@ -79,6 +87,18 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
     () => liveRiders.map((r, i) => ({ id: r.id, lng: r.lng, lat: r.lat, label: r.name ?? `Rider ${i + 1}`, color: "#19e27a" })),
     [liveRiders],
   );
+
+  async function createGroup() {
+    setCreatingGroup(true);
+    setErr(null);
+    try {
+      const { group } = await api.createGroup(track.id);
+      router.push(`/group/${group.id}?join=1`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not create group (are you online?)");
+      setCreatingGroup(false);
+    }
+  }
 
   const lines: MapLine[] = useMemo(
     () => (traj.length > 1 ? [{ id: "traj", coords: traj.map((p) => [p.lng, p.lat] as [number, number]), color: "#3ad7ff", speeds: traj.map((p) => (p.v == null ? null : p.v * 3.6)), width: 3 }] : []),
@@ -177,8 +197,48 @@ export function TrackView({ sessionId, trackId, calibrate }: { sessionId: string
                   <span className="h-2.5 w-2.5 rounded-full bg-go" />
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{r.name ?? `Rider ${i + 1}`}</span>
                   <span className="timing text-sm text-dim">{r.speed == null ? "--" : Math.round(r.speed * 3.6)} km/h</span>
+                  {r.groupId && (
+                    <Link href={`/group/${r.groupId}`} className="rounded bg-line px-3 py-1.5 text-xs font-bold uppercase">
+                      Group
+                    </Link>
+                  )}
                   <Link href={`/live/${r.id}`} className="rounded bg-go/15 px-3 py-1.5 text-xs font-bold text-go uppercase">
                     Watch
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
+
+      {watchLive && (
+        <Panel
+          title={`Group rides (${groups.length})`}
+          right={
+            <button onClick={createGroup} disabled={creatingGroup} className="rounded bg-flag px-3 py-1 text-xs font-bold text-black uppercase disabled:opacity-50">
+              {creatingGroup ? "Creating…" : "Create group"}
+            </button>
+          }
+        >
+          {groups.length === 0 ? (
+            <p className="text-sm text-dim">No group rides here today. Create one and share the link — friends join and see each other live with a leaderboard.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {groups.map((g) => (
+                <li key={g.id} className="flex items-center gap-3 py-2">
+                  <span className={`h-2.5 w-2.5 rounded-full ${g.liveRiders > 0 ? "bg-go" : "bg-line"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{g.name ?? "Group ride"}</span>
+                    <span className="text-xs text-dim">
+                      {g.riders} rider{g.riders === 1 ? "" : "s"} · {g.liveRiders} live
+                    </span>
+                  </span>
+                  <Link href={`/group/${g.id}`} className="rounded bg-line px-3 py-1.5 text-xs font-bold uppercase">
+                    Watch
+                  </Link>
+                  <Link href={`/group/${g.id}?join=1`} className="rounded bg-go/15 px-3 py-1.5 text-xs font-bold text-go uppercase">
+                    Join
                   </Link>
                 </li>
               ))}

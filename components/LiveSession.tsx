@@ -111,6 +111,11 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
           </button>
         ))}
         <span className="ml-auto" />
+        {s.meta.groupId && (
+          <Link href={`/group/${s.meta.groupId}`} className="rounded bg-line px-3 py-1.5 text-xs font-black tracking-widest uppercase">
+            Group
+          </Link>
+        )}
         <ShareLiveButton sessionId={sessionId} />
       </div>
 

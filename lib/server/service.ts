@@ -67,11 +67,21 @@ export function toLapRecord(r: repo.LapRow): LapRecord {
 // Write side
 // ---------------------------------------------------------------------------
 
-export async function createSession(trackId: string, name?: string) {
+export async function createSession(trackId: string, name?: string, groupId?: string) {
   requireTrack(trackId);
+  if (groupId) {
+    const g = await repo.getGroupRow(groupId);
+    if (!g) throw new ServiceError(404, "Group not found");
+    if (g.track_id !== trackId) throw new ServiceError(400, "This group rides on a different track");
+  }
   const writeToken = newWriteToken();
-  const row = await repo.insertSession(trackId, name, hashToken(writeToken));
+  const row = await repo.insertSession(trackId, name, hashToken(writeToken), groupId);
   return { session: repo.toTrackSession(row), writeToken };
+}
+
+export async function createGroup(trackId: string, name?: string) {
+  requireTrack(trackId);
+  return toGroup(await repo.insertGroup(trackId, name));
 }
 
 export async function ingestPoints(sessionId: string, token: string | null, points: GPSPoint[]) {
@@ -182,7 +192,7 @@ export async function getSessionLive(sessionId: string, sinceTs: number) {
   const s = await requireSession(sessionId);
   const raw = await repo.getPoints(sessionId, sinceTs + 1);
   return {
-    session: { ...repo.toTrackSession(s), startFinish: s.start_finish ?? null },
+    session: { ...repo.toTrackSession(s), startFinish: s.start_finish ?? null, groupId: s.group_id ?? null },
     points: raw.slice(-LIVE_MAX_POINTS),
     serverTime: Date.now(),
   };
@@ -196,7 +206,86 @@ export async function listLiveRiders(trackId: string) {
   const withLast = await Promise.all(rows.map(async (r) => ({ r, last: await repo.getLatestPoint(r.id) })));
   return withLast
     .filter(({ last }) => last != null && Date.now() - last.ts < LIVE_STALE_MS)
-    .map(({ r, last }) => ({ id: r.id, name: r.name, startedAt: r.started_at, lastFixAt: last!.ts, lat: last!.lat, lng: last!.lng, speed: last!.speed }));
+    .map(({ r, last }) => ({
+      id: r.id,
+      name: r.name,
+      startedAt: r.started_at,
+      lastFixAt: last!.ts,
+      lat: last!.lat,
+      lng: last!.lng,
+      speed: last!.speed,
+      groupId: r.group_id ?? null,
+    }));
+}
+
+/** Group rides on a circuit from the last 12 h, so people at the track can find and join them (never Free Road). */
+export async function listTrackGroups(trackId: string) {
+  const t = requireTrack(trackId);
+  if (t.free) return [];
+  const groups = await repo.listRecentGroupRows(trackId, new Date(Date.now() - 12 * 3600_000).toISOString());
+  const sessions = await repo.listSessionRowsByGroups(groups.map((g) => g.id));
+  const active = sessions.filter((s) => s.status === "active");
+  const lastById = new Map(await Promise.all(active.map(async (s) => [s.id, await repo.getLatestPoint(s.id)] as const)));
+  return groups.map((g) => {
+    const members = sessions.filter((s) => s.group_id === g.id);
+    const live = members.filter((s) => {
+      const last = lastById.get(s.id);
+      return last != null && Date.now() - last.ts < LIVE_STALE_MS;
+    });
+    return { ...toGroup(g), riders: members.length, liveRiders: live.length };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Groups
+// ---------------------------------------------------------------------------
+
+const toGroup = (g: repo.GroupRow) => ({ id: g.id, trackId: g.track_id, name: g.name, createdAt: g.created_at });
+
+/** First group poll returns this much recent trail per rider. */
+const GROUP_TRAIL_MS = 5 * 60_000;
+/** Overlap re-sent on every poll so points committed during the previous query aren't missed (client dedupes). */
+const GROUP_POLL_OVERLAP_MS = 10_000;
+const GROUP_MAX_POINTS = 5000;
+
+/**
+ * Group live view poll. `sinceServerTime` is the `serverTime` of the previous response (0 on first
+ * poll); points are selected by arrival time on the server so phone clock skew and late offline
+ * uploads never hide a rider. Lap times come from the server's (≤30 s old) recompute.
+ */
+export async function getGroupLive(groupId: string, sinceServerTime: number) {
+  const g = await repo.getGroupRow(groupId);
+  if (!g) throw new ServiceError(404, "Group not found");
+  const serverTime = Date.now();
+  const sessions = await repo.listGroupSessionRows(groupId);
+  const ids = sessions.map((s) => s.id);
+  const from = sinceServerTime > 0 ? Math.min(sinceServerTime, serverTime) - GROUP_POLL_OVERLAP_MS : serverTime - GROUP_TRAIL_MS;
+  const [points, laps, latest] = await Promise.all([
+    repo.getPointsReceivedSince(ids, new Date(from).toISOString(), GROUP_MAX_POINTS),
+    repo.getLapTimes(ids),
+    // Latest fix even when it's older than the trail window (rider stopped / went offline).
+    sinceServerTime > 0 ? Promise.resolve([]) : Promise.all(ids.map((id) => repo.getLatestPoint(id))),
+  ]);
+  return {
+    group: toGroup(g),
+    riders: sessions.map((s, i) => {
+      const timed = laps.filter((l) => l.session_id === s.id && l.is_timed);
+      const last = latest[i];
+      return {
+        sessionId: s.id,
+        name: s.name,
+        status: s.status,
+        startedAt: s.started_at,
+        startFinish: s.start_finish ?? null,
+        timedLaps: timed.length,
+        bestLapMs: timed.length ? Math.min(...timed.map((l) => l.lap_time_ms)) : null,
+        lastLapMs: timed.length ? timed[timed.length - 1]!.lap_time_ms : null,
+        latest: last ? { timestamp: last.ts, latitude: last.lat, longitude: last.lng, speed: last.speed } : null,
+        points: points.filter((p) => p.sessionId === s.id).map(({ sessionId: _s, ...p }) => p),
+      };
+    }),
+    serverTime,
+  };
 }
 
 export async function getSessionLaps(sessionId: string) {

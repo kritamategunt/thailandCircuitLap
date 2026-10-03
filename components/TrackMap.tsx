@@ -253,6 +253,12 @@ export function TrackMap({ track, lines = [], draftMarkers = [], draftLines = []
     (map.getSource("draft") as unknown as { setData: (d: FeatureCollection) => void }).setData(fc(draftLines.map((l) => lineFeature(l))));
   }, [ready, track, draftMarkers, draftLines]);
 
+  // Following a different rider (or turning follow on) re-centres even after the user panned.
+  const leadId = riders[0]?.id;
+  useEffect(() => {
+    if (follow) setFollowing(true);
+  }, [follow, leadId]);
+
   // Live rider dots: move existing markers instead of recreating them every poll.
   useEffect(() => {
     const map = mapRef.current;

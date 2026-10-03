@@ -10,7 +10,7 @@ export async function POST(req: Request) {
     const body = await readJson(req);
     if (!body.ok) return fail(body.status, body.error);
     const input = createSessionSchema.parse(body.data);
-    return json(await createSession(input.trackId, input.name), 201);
+    return json(await createSession(input.trackId, input.name, input.groupId), 201);
   });
 }
 
