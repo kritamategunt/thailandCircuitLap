@@ -2,18 +2,45 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RideAlert } from "@/lib/telemetry/rideSafety";
 
-const SETTINGS_KEY = "tc.rideAlerts";
+const SETTINGS_KEY = "tc.rideAlerts.v2";
 /** Same alert repeats at most this often while its condition holds. */
 const REPEAT_MS = 3 * 60_000;
 const SPEED_REPEAT_MS = 30_000;
 const BANNER_MS = 8_000;
 
-export type AlertSettings = { voice: boolean; vibrate: boolean; speedLimitKmh: number | null };
+export type AlertSettings = { sound: boolean; vibrate: boolean; speedLimitOn: boolean; speedLimitKmh: number };
+
+/** Beep pattern per level: danger = 3 high beeps, warn = 2 lower ones. Short and distinct from music/navigation voices. */
+const BEEPS: Record<RideAlert["level"], { hz: number; count: number }> = { danger: { hz: 1320, count: 3 }, warn: { hz: 880, count: 2 } };
+
+let audio: AudioContext | null = null;
+
+function beep(level: RideAlert["level"]) {
+  if (!audio) return;
+  const { hz, count } = BEEPS[level];
+  const t0 = audio.currentTime + 0.02;
+  for (let i = 0; i < count; i++) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = "square";
+    osc.frequency.value = hz;
+    const t = t0 + i * 0.22;
+    // Quick fade in/out so the beep doesn't click.
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
+    gain.gain.setValueAtTime(0.35, t + 0.14);
+    gain.gain.linearRampToValueAtTime(0, t + 0.16);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t);
+    osc.stop(t + 0.17);
+  }
+}
 
 function loadSettings(defaults: AlertSettings): AlertSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...defaults, ...(JSON.parse(raw) as Partial<AlertSettings>) } : defaults;
+    const saved = raw ? (JSON.parse(raw) as Partial<AlertSettings>) : {};
+    return { ...defaults, ...saved, speedLimitKmh: typeof saved.speedLimitKmh === "number" ? saved.speedLimitKmh : defaults.speedLimitKmh };
   } catch {
     return defaults;
   }
@@ -37,20 +64,20 @@ export function useAlertSettings(defaults: AlertSettings) {
 }
 
 /**
- * Turns active RideAlerts into something a rider notices without looking: spoken text, a vibration
- * (Android; iOS Safari has no vibration API) and a big banner. Each alert fires when it first
+ * Turns active RideAlerts into something a rider notices: a warning beep, a vibration (Android;
+ * iOS Safari has no vibration API) and a popup. Each alert fires when it first
  * appears, then repeats only every few minutes while it stays active.
  */
 export function useRideAlerts(alerts: RideAlert[], { enabled, settings }: { enabled: boolean; settings: AlertSettings }) {
   const [banner, setBanner] = useState<RideAlert | null>(null);
   const lastFired = useRef(new Map<string, number>());
 
-  /** iOS only lets a page speak after a user gesture: call from the START tap (or a test button, with `text`). */
-  const unlock = useCallback((text = " ") => {
+  /** Browsers (iOS especially) only allow audio after a user gesture: call from the START tap. `test` plays a sample beep. */
+  const unlock = useCallback((test?: RideAlert["level"]) => {
     try {
-      const u = new SpeechSynthesisUtterance(text);
-      if (text === " ") u.volume = 0;
-      speechSynthesis.speak(u);
+      audio ??= new AudioContext();
+      void audio.resume();
+      if (test) beep(test);
     } catch {}
   }, []);
 
@@ -65,13 +92,13 @@ export function useRideAlerts(alerts: RideAlert[], { enabled, settings }: { enab
       return last == null || now - last >= (a.key === "speed" ? SPEED_REPEAT_MS : REPEAT_MS);
     });
     if (due.length === 0) return;
-    // Most urgent first; speak them as one queue so they don't talk over each other.
+    // Most urgent first: one beep + popup for the batch, so several alerts don't stack noise.
     due.sort((a, b) => (a.level === b.level ? 0 : a.level === "danger" ? -1 : 1));
     for (const a of due) lastFired.current.set(a.key, now);
     setBanner(due[0]!);
     if (settings.vibrate) navigator.vibrate?.(due[0]!.level === "danger" ? [300, 120, 300, 120, 300] : [200, 100, 200]);
-    if (settings.voice && "speechSynthesis" in window) for (const a of due) speechSynthesis.speak(new SpeechSynthesisUtterance(a.text));
-  }, [alerts, enabled, settings.voice, settings.vibrate]);
+    if (settings.sound) beep(due[0]!.level);
+  }, [alerts, enabled, settings.sound, settings.vibrate]);
 
   useEffect(() => {
     if (!banner) return;

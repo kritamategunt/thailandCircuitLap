@@ -14,7 +14,8 @@ import { formatDistance, formatGap, rideAlerts, type FriendState } from "@/lib/t
 
 /** Friends' gaps are measured over this much of my own trail (~5 min at 1 Hz, matches the group feed window). */
 const GAP_TRAIL_POINTS = 300;
-const SPEED_LIMITS = [null, 60, 80, 90, 100, 120] as const;
+const SPEED_LIMIT_MIN = 30;
+const SPEED_LIMIT_MAX = 200;
 
 const GPS_LABEL: Record<string, string> = {
   idle: "OFF",
@@ -61,7 +62,7 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
 
   const isFreeTrack = !!s.track?.free;
   // Public roads get a speed reminder by default; circuits don't.
-  const alertDefaults: AlertSettings = useMemo(() => ({ voice: true, vibrate: true, speedLimitKmh: isFreeTrack ? 100 : null }), [isFreeTrack]);
+  const alertDefaults: AlertSettings = useMemo(() => ({ sound: true, vibrate: true, speedLimitOn: isFreeTrack, speedLimitKmh: 100 }), [isFreeTrack]);
   const { settings: alertSettings, setSettings: setAlertSettings } = useAlertSettings(alertDefaults);
   const [showAlertSettings, setShowAlertSettings] = useState(false);
   const activeAlerts = useMemo(() => {
@@ -70,8 +71,8 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
       const last = rider.trail[rider.trail.length - 1];
       return { id: rider.sessionId, name: rider.name ?? "Rider", gap, stoppedMs, signalAgeMs: last ? clock - last.timestamp : null, finished: rider.status === "completed" };
     });
-    return rideAlerts({ mySpeedKmh: s.gps.status === "active" ? s.live.speedKmh : null, speedLimitKmh: alertSettings.speedLimitKmh, friends: states });
-  }, [s.recording, friends, clock, s.gps.status, s.live.speedKmh, alertSettings.speedLimitKmh]);
+    return rideAlerts({ mySpeedKmh: s.gps.status === "active" ? s.live.speedKmh : null, speedLimitKmh: alertSettings.speedLimitOn ? alertSettings.speedLimitKmh : null, friends: states });
+  }, [s.recording, friends, clock, s.gps.status, s.live.speedKmh, alertSettings.speedLimitOn, alertSettings.speedLimitKmh]);
   const alerts = useRideAlerts(activeAlerts, { enabled: s.recording === "recording", settings: alertSettings });
 
   const riders: MapRider[] = useMemo(() => {
@@ -168,7 +169,7 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
         <button
           onClick={() => setShowAlertSettings(true)}
           aria-label="Safety alerts"
-          className={`rounded px-2.5 py-1.5 text-xs font-black ${alertSettings.voice || alertSettings.vibrate ? "bg-line" : "bg-line text-dim line-through"}`}
+          className={`rounded px-2.5 py-1.5 text-xs font-black ${alertSettings.sound || alertSettings.vibrate ? "bg-line" : "bg-line text-dim line-through"}`}
         >
           🔔
         </button>
@@ -323,34 +324,52 @@ export function LiveSession({ sessionId }: { sessionId: string }) {
           <div className="w-full max-w-sm space-y-4 rounded-xl bg-panel p-5" onClick={(e) => e.stopPropagation()}>
             <p className="text-lg font-black">Safety alerts</p>
             <p className="text-xs text-dim">
-              Spoken + on-screen while recording: speed over your limit{s.meta.groupId ? ", a friend far behind, stopped or without signal" : ""}. Keep this
+              Warning beep + popup while recording: speed over your limit{s.meta.groupId ? ", a friend far behind, stopped or without signal" : ""}. Keep this
               screen open: phones stop web apps in the background.
             </p>
             <label className="flex items-center justify-between text-sm font-bold">
-              Voice
-              <input type="checkbox" checked={alertSettings.voice} onChange={(e) => setAlertSettings({ voice: e.target.checked })} className="h-5 w-5" />
+              Sound
+              <input type="checkbox" checked={alertSettings.sound} onChange={(e) => setAlertSettings({ sound: e.target.checked })} className="h-5 w-5" />
             </label>
             <label className="flex items-center justify-between text-sm font-bold">
               Vibrate <span className="ml-1 text-xs font-normal text-dim">(Android)</span>
               <input type="checkbox" checked={alertSettings.vibrate} onChange={(e) => setAlertSettings({ vibrate: e.target.checked })} className="ml-auto h-5 w-5" />
             </label>
-            <div>
-              <div className="mb-2 text-sm font-bold">Speed limit reminder</div>
-              <div className="grid grid-cols-6 gap-1">
-                {SPEED_LIMITS.map((v) => (
-                  <button
-                    key={v ?? "off"}
-                    onClick={() => setAlertSettings({ speedLimitKmh: v })}
-                    className={`rounded py-2 text-xs font-black ${alertSettings.speedLimitKmh === v ? "bg-flag text-black" : "bg-line"}`}
-                  >
-                    {v ?? "Off"}
-                  </button>
-                ))}
+            <div className="space-y-2">
+              <label className="flex items-center justify-between text-sm font-bold">
+                Speed limit warning
+                <input
+                  type="checkbox"
+                  checked={alertSettings.speedLimitOn}
+                  onChange={(e) => setAlertSettings({ speedLimitOn: e.target.checked })}
+                  className="h-5 w-5"
+                />
+              </label>
+              <div className={alertSettings.speedLimitOn ? "" : "opacity-40"}>
+                <div className="timing text-center text-3xl font-black">
+                  {alertSettings.speedLimitKmh}
+                  <span className="ml-1 text-sm text-dim">km/h</span>
+                </div>
+                <input
+                  type="range"
+                  min={SPEED_LIMIT_MIN}
+                  max={SPEED_LIMIT_MAX}
+                  step={5}
+                  value={alertSettings.speedLimitKmh}
+                  disabled={!alertSettings.speedLimitOn}
+                  onChange={(e) => setAlertSettings({ speedLimitKmh: Number(e.target.value) })}
+                  aria-label="Speed limit (km/h)"
+                  className="w-full accent-flag"
+                />
+                <div className="flex justify-between text-[10px] text-dim">
+                  <span>{SPEED_LIMIT_MIN}</span>
+                  <span>{SPEED_LIMIT_MAX}</span>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => alerts.unlock("Alerts are on")} className="rounded-lg bg-line py-3 text-sm font-bold">
-                Test voice
+              <button onClick={() => alerts.unlock("danger")} className="rounded-lg bg-line py-3 text-sm font-bold">
+                Test sound
               </button>
               <button onClick={() => setShowAlertSettings(false)} className="rounded-lg bg-flag py-3 text-sm font-black text-black">
                 Done
