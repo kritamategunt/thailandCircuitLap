@@ -20,3 +20,14 @@ export function speedRange(values: Array<number | null | undefined>): SpeedRange
 export function speedStops({ lo, hi }: SpeedRange): Array<number | string> {
   return [lo, SPEED_COLORS[0], (lo + hi) / 2, SPEED_COLORS[1], hi, SPEED_COLORS[2]];
 }
+
+const rgb = (hex: string): [number, number, number] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+
+/** Colour for one speed on the same scale (for canvases/PDFs that can't use MapLibre or CSS gradients). */
+export function speedColor(v: number, { lo, hi }: SpeedRange): [number, number, number] {
+  const t = Math.min(1, Math.max(0, (v - lo) / (hi - lo))) * (SPEED_COLORS.length - 1);
+  const i = Math.min(SPEED_COLORS.length - 2, Math.floor(t));
+  const a = rgb(SPEED_COLORS[i]!);
+  const b = rgb(SPEED_COLORS[i + 1]!);
+  return a.map((c, k) => Math.round(c + (b[k]! - c) * (t - i))) as [number, number, number];
+}

@@ -13,6 +13,8 @@ export function LapAnalysisView({ lapId }: { lapId: string }) {
   const [lap, setLap] = useState<LapDetail | null>(null);
   const [analysis, setAnalysis] = useState<LapAnalysis | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState<string | null>(null);
 
   useEffect(() => {
     api.lap(lapId, true).then(setLap).catch((e: Error) => setErr(e.message));
@@ -32,6 +34,20 @@ export function LapAnalysisView({ lapId }: { lapId: string }) {
   if (!lap) return <Empty>Loading…</Empty>;
   const m = lap.lap.metrics;
 
+  async function exportPdf() {
+    if (!lap) return;
+    setExporting(true);
+    setExportErr(null);
+    try {
+      const { exportLapPdf } = await import("@/lib/client/lapPdf");
+      await exportLapPdf({ lap, analysis, track });
+    } catch (e) {
+      setExportErr(e instanceof Error ? `PDF export failed: ${e.message}` : "PDF export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between">
@@ -43,8 +59,14 @@ export function LapAnalysisView({ lapId }: { lapId: string }) {
             Lap {lap.lap.lapNumber} {!lap.lap.isTimed && <span className="text-sm text-dim uppercase">({lap.lap.kind} lap)</span>}
           </h1>
         </div>
-        <QualityBadge rating={m.gpsQuality.rating} />
+        <div className="flex items-center gap-2">
+          <QualityBadge rating={m.gpsQuality.rating} />
+          <button onClick={exportPdf} disabled={exporting} className="rounded bg-line px-3 py-2 text-xs font-bold uppercase disabled:opacity-50">
+            {exporting ? "Exporting…" : "Export PDF"}
+          </button>
+        </div>
       </div>
+      {exportErr && <p className="text-sm text-red">{exportErr}</p>}
 
       <Panel>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

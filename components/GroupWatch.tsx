@@ -1,9 +1,10 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { GPSPoint, TrackDefinition } from "@/lib/types";
-import { api, type Group, type GroupRider } from "@/lib/client/api";
+import { useEffect, useMemo, useState } from "react";
+import type { TrackDefinition } from "@/lib/types";
+import { api } from "@/lib/client/api";
+import { riderStatus, useGroupFeed, type RiderStatus } from "@/hooks/useGroupFeed";
 import { listSessionMetas, saveSessionMeta, type LocalSessionMeta } from "@/lib/client/localStore";
 import { formatLapTime } from "@/lib/telemetry/analysis";
 import { getTrack } from "@/tracks";
@@ -12,43 +13,15 @@ import { ShareLiveButton } from "@/components/ShareLiveButton";
 import { Empty, Panel } from "@/components/ui";
 
 const POLL_MS = 3_000;
-const TRAIL_POINTS = 300;
-/** Same thresholds as the single-rider view (LiveWatch). */
-const LIVE_MS = 15_000;
-const OFFLINE_MS = 120_000;
 const NAME_KEY = "tc.riderName";
-/** Rider colours by join order — distinct on the dark satellite map. */
-const COLORS = ["#3ad7ff", "#ff4fd8", "#ffd23a", "#19e27a", "#ff7a3a", "#a78bfa", "#f87171", "#e5e7eb"];
 
-type Status = "waiting" | "live" | "delayed" | "offline" | "finished";
-const STATUS_STYLE: Record<Status, string> = {
+const STATUS_STYLE: Record<RiderStatus, string> = {
   waiting: "text-dim",
   live: "text-go",
   delayed: "text-flag",
   offline: "text-red",
   finished: "text-dim",
 };
-
-type Rider = Omit<GroupRider, "points" | "latest"> & {
-  trail: GPSPoint[];
-  color: string;
-};
-
-/** Append new fixes, dropping duplicates (polls overlap) and keeping time order. */
-function mergeTrail(trail: GPSPoint[], points: GPSPoint[]): GPSPoint[] {
-  if (points.length === 0) return trail;
-  const byTs = new Map(trail.map((p) => [p.timestamp, p]));
-  for (const p of points) byTs.set(p.timestamp, p);
-  return [...byTs.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-TRAIL_POINTS);
-}
-
-function riderStatus(r: Rider, now: number): Status {
-  if (r.status === "completed") return "finished";
-  const last = r.trail[r.trail.length - 1];
-  if (!last) return "waiting";
-  const age = now - last.timestamp;
-  return age < LIVE_MS ? "live" : age < OFFLINE_MS ? "delayed" : "offline";
-}
 
 /**
  * Group view: everyone who joined /group/<id> on one map + a leaderboard. Anyone with the link
@@ -63,51 +36,14 @@ export function GroupWatch({
   focusJoin?: boolean;
 }) {
   const router = useRouter();
-  const [group, setGroup] = useState<Group | null>(null);
-  const [riders, setRiders] = useState<Rider[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  const { group, riders, err: feedErr } = useGroupFeed(groupId, POLL_MS);
+  const [joinErr, setErr] = useState<string | null>(null);
+  const err = joinErr ?? feedErr;
   const [now, setNow] = useState(() => Date.now());
   const [selected, setSelected] = useState<string | null>(null);
   const [mine, setMine] = useState<LocalSessionMeta | null>(null);
   const [name, setName] = useState("");
   const [joining, setJoining] = useState(false);
-  const since = useRef(0);
-
-  useEffect(() => {
-    let stop = false;
-    let handle: ReturnType<typeof setTimeout>;
-    async function poll() {
-      if (document.visibilityState === "visible") {
-        try {
-          const r = await api.groupLive(groupId, since.current);
-          if (stop) return;
-          const first = since.current === 0;
-          since.current = r.serverTime;
-          setErr(null);
-          setGroup(r.group);
-          setRiders((prev) => {
-            const old = new Map(prev.map((p) => [p.sessionId, p]));
-            return r.riders.map(({ points, latest, ...info }, i) => {
-              const seed = first && latest && points.length === 0 ? [{ ...latest, accuracy: 0 }] : [];
-              return {
-                ...info,
-                color: COLORS[i % COLORS.length]!,
-                trail: mergeTrail(old.get(info.sessionId)?.trail ?? seed, points),
-              };
-            });
-          });
-        } catch (e) {
-          if (!stop) setErr(e instanceof Error ? e.message : "Connection problem");
-        }
-      }
-      if (!stop) handle = setTimeout(poll, POLL_MS);
-    }
-    void poll();
-    return () => {
-      stop = true;
-      clearTimeout(handle);
-    };
-  }, [groupId]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);

@@ -12,3 +12,5 @@ export * from "./compare";
 export * from "./analysis";
 export * from "./liveTimer";
 export * from "./freeRoad";
+export * from "./groupGap";
+export * from "./rideSafety";
